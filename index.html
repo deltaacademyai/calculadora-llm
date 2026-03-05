@@ -1,0 +1,385 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Calculadora LLM Corporativo - Delta Academy</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/recharts/2.8.0/Recharts.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.2/babel.min.js"></script>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif; background: #f8fafc; }
+    input, select { font-family: inherit; }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+
+  <script type="text/babel">
+    const { useState, useMemo } = React;
+    const { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, LineChart, Line } = Recharts;
+
+    const PLANS = {
+      claude: {
+        name: "Claude", color: "#D97706", logo: "🤖",
+        plans: {
+          team: { name: "Teams", pricePerSeat: 25, minSeats: 5, type: "seat" },
+          enterprise: { name: "Enterprise", pricePerSeat: 60, minSeats: 50, type: "seat" },
+          api: { name: "API (Sonnet)", inputPer1M: 3, outputPer1M: 15, type: "api" },
+        },
+        strengths: ["Análise de documentos", "Raciocínio complexo", "Segurança e privacidade", "Redação longa"],
+      },
+      gpt: {
+        name: "ChatGPT", color: "#10B981", logo: "💬",
+        plans: {
+          plus: { name: "Plus", pricePerSeat: 20, minSeats: 1, type: "seat" },
+          team: { name: "Team", pricePerSeat: 25, minSeats: 2, type: "seat" },
+          enterprise: { name: "Enterprise", pricePerSeat: 60, minSeats: 150, type: "seat" },
+          api: { name: "API (GPT-4o)", inputPer1M: 2.5, outputPer1M: 10, type: "api" },
+        },
+        strengths: ["Ecossistema amplo", "Code Interpreter", "GPTs customizados", "Integrações nativas"],
+      },
+      gemini: {
+        name: "Gemini", color: "#6366F1", logo: "✨",
+        plans: {
+          business: { name: "Business", pricePerSeat: 20, minSeats: 1, type: "seat" },
+          enterprise: { name: "Enterprise", pricePerSeat: 30, minSeats: 1, type: "seat" },
+          api: { name: "API (1.5 Pro)", inputPer1M: 1.25, outputPer1M: 5, type: "api" },
+        },
+        strengths: ["Contexto longo (1M tokens)", "Integração Google Workspace", "Multimodal nativo", "Custo mais baixo"],
+      },
+    };
+
+    const USE_CASES = [
+      { id: "docs", label: "Análise de documentos", scores: { claude: 10, gpt: 8, gemini: 9 } },
+      { id: "code", label: "Geração de código", scores: { claude: 9, gpt: 10, gemini: 8 } },
+      { id: "writing", label: "Redação e copywriting", scores: { claude: 10, gpt: 9, gemini: 8 } },
+      { id: "data", label: "Análise de dados", scores: { claude: 8, gpt: 10, gemini: 8 } },
+      { id: "support", label: "Atendimento / Suporte", scores: { claude: 9, gpt: 9, gemini: 9 } },
+      { id: "google", label: "Integração Google Workspace", scores: { claude: 5, gpt: 6, gemini: 10 } },
+    ];
+
+    const AVG_TOKENS = { low: 800, medium: 2000, high: 5000 };
+    const RAG_THRESHOLD = 3000;
+
+    function calcSeatCost(price, std, prem, min) {
+      return price * Math.max(std + prem, min);
+    }
+    function calcApiCost(inp, out, msgs, tokens) {
+      return (msgs * tokens * 0.6 / 1e6) * inp + (msgs * tokens * 0.4 / 1e6) * out;
+    }
+
+    function ScoreBar({ value, color }) {
+      return (
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <div style={{ width: 100, background: "#e5e7eb", borderRadius: 4, height: 8 }}>
+            <div style={{ width: `${(value / 10) * 100}%`, background: color, borderRadius: 4, height: 8 }} />
+          </div>
+          <span style={{ fontSize: 12, color: "#6b7280" }}>{Number(value).toFixed(1)}/10</span>
+        </div>
+      );
+    }
+
+    function App() {
+      const [step, setStep] = useState(1);
+      const [inputs, setInputs] = useState({
+        standardSeats: 10, premiumSeats: 3, msgsPerDay: 15,
+        usageIntensity: "medium", useCases: [], budget: 2000, techLevel: "medium",
+      });
+
+      const upd = (k, v) => setInputs(p => ({ ...p, [k]: v }));
+      const toggleUC = (id) => setInputs(p => ({
+        ...p, useCases: p.useCases.includes(id) ? p.useCases.filter(x => x !== id) : [...p.useCases, id]
+      }));
+
+      const results = useMemo(() => {
+        const totalUsers = inputs.standardSeats + inputs.premiumSeats;
+        const totalMsgs = totalUsers * inputs.msgsPerDay * 22;
+        const tokens = AVG_TOKENS[inputs.usageIntensity];
+        const r = {};
+        for (const [key, llm] of Object.entries(PLANS)) {
+          const plans = {};
+          for (const [pk, plan] of Object.entries(llm.plans)) {
+            let cost = plan.type === "seat"
+              ? calcSeatCost(plan.pricePerSeat, inputs.standardSeats, inputs.premiumSeats, plan.minSeats)
+              : calcApiCost(plan.inputPer1M, plan.outputPer1M, totalMsgs, tokens) + 400;
+            plans[pk] = { ...plan, cost: Math.round(cost) };
+          }
+          const bestPlan = Object.entries(plans).filter(([k]) => k !== "api").sort((a, b) => a[1].cost - b[1].cost)[0];
+          const useCaseScore = inputs.useCases.length > 0
+            ? inputs.useCases.reduce((acc, uc) => acc + (USE_CASES.find(u => u.id === uc)?.scores[key] || 0), 0) / inputs.useCases.length
+            : 7;
+          r[key] = { plans, bestPlan: bestPlan?.[1], apiPlan: plans.api, useCaseScore, ...llm };
+        }
+        const cheapestApi = Object.entries(r).sort((a, b) => a[1].apiPlan.cost - b[1].apiPlan.cost)[0];
+        const cheapestCorp = Object.entries(r).sort((a, b) => (a[1].bestPlan?.cost || 9999) - (b[1].bestPlan?.cost || 9999))[0];
+        const ragRecommended = (cheapestCorp[1].bestPlan?.cost || 0) > RAG_THRESHOLD || inputs.techLevel === "high" || totalMsgs > 50000;
+        const ragSavings = (cheapestCorp[1].bestPlan?.cost || 0) - cheapestApi[1].apiPlan.cost;
+        const scores = {};
+        for (const [k, v] of Object.entries(r)) {
+          const costScore = Math.max(0, 10 - (v.bestPlan?.cost / 500));
+          scores[k] = ((v.useCaseScore * 0.5) + (costScore * 0.3) + (inputs.budget > (v.bestPlan?.cost || 0) ? 2 : 0)).toFixed(1);
+        }
+        const winner = Object.entries(scores).sort((a, b) => b[1] - a[1])[0][0];
+        return { r, ragRecommended, ragSavings, scores, winner, totalUsers, totalMsgsMonth: totalMsgs };
+      }, [inputs]);
+
+      const chartData = Object.entries(results.r).map(([k, v]) => ({
+        name: v.name,
+        "Plano Corporativo": v.bestPlan?.cost || 0,
+        "Via API + RAG": v.apiPlan.cost,
+      }));
+
+      const scaleData = [5, 10, 20, 50, 100, 200].map(seats => {
+        const row = { seats };
+        for (const [k, llm] of Object.entries(PLANS)) {
+          const best = Object.entries(llm.plans).filter(([pk]) => pk !== "api")
+            .sort((a, b) => calcSeatCost(a[1].pricePerSeat, seats, 0, a[1].minSeats) - calcSeatCost(b[1].pricePerSeat, seats, 0, b[1].minSeats))[0];
+          row[llm.name] = best ? calcSeatCost(best[1].pricePerSeat, seats, 0, best[1].minSeats) : 0;
+        }
+        return row;
+      });
+
+      const winnerData = results.r[results.winner];
+
+      const inp = (label, field, min = 0) => (
+        <div style={{ marginBottom: 16 }}>
+          <label style={{ display: "block", fontSize: 14, fontWeight: 600, color: "#374151", marginBottom: 6 }}>{label}</label>
+          <input type="number" min={min} value={inputs[field]} onChange={e => upd(field, Number(e.target.value))}
+            style={{ width: "100%", padding: "10px 12px", border: "1px solid #d1d5db", borderRadius: 8, fontSize: 14, outline: "none" }} />
+        </div>
+      );
+
+      const sel = (label, field, opts) => (
+        <div style={{ marginBottom: 16 }}>
+          <label style={{ display: "block", fontSize: 14, fontWeight: 600, color: "#374151", marginBottom: 6 }}>{label}</label>
+          <select value={inputs[field]} onChange={e => upd(field, e.target.value)}
+            style={{ width: "100%", padding: "10px 12px", border: "1px solid #d1d5db", borderRadius: 8, fontSize: 14, background: "white" }}>
+            {opts.map(o => <option key={o.v} value={o.v}>{o.l}</option>)}
+          </select>
+        </div>
+      );
+
+      const card = (style, children) => (
+        <div style={{ background: "white", borderRadius: 12, padding: 20, marginBottom: 16, boxShadow: "0 1px 3px rgba(0,0,0,0.08)", ...style }}>{children}</div>
+      );
+
+      return (
+        <div style={{ fontFamily: "inherit", background: "#f8fafc", minHeight: "100vh", paddingBottom: 40 }}>
+          <div style={{ background: "linear-gradient(135deg, #1e293b 0%, #334155 100%)", padding: "32px 24px", textAlign: "center" }}>
+            <div style={{ fontSize: 13, color: "#94a3b8", marginBottom: 8, letterSpacing: 2, textTransform: "uppercase" }}>Delta Academy</div>
+            <h1 style={{ color: "white", fontSize: 24, fontWeight: 700, margin: "0 0 8px" }}>Calculadora LLM Corporativo</h1>
+            <p style={{ color: "#94a3b8", fontSize: 14, margin: 0 }}>Claude vs ChatGPT vs Gemini - Qual LLM vale o investimento?</p>
+            <div style={{ display: "flex", justifyContent: "center", gap: 8, marginTop: 20 }}>
+              {[1, 2, 3].map(s => (
+                <div key={s} onClick={() => s < step && setStep(s)} style={{
+                  width: 32, height: 32, borderRadius: "50%", display: "flex", alignItems: "center", justifyContent: "center",
+                  background: step >= s ? "#f59e0b" : "#475569", color: "white", fontSize: 13, fontWeight: 700,
+                  cursor: s < step ? "pointer" : "default"
+                }}>{s}</div>
+              ))}
+            </div>
+            <div style={{ display: "flex", justifyContent: "center", gap: 40, marginTop: 6 }}>
+              {["Equipe", "Uso", "Resultado"].map((l, i) => (
+                <span key={l} style={{ fontSize: 11, color: step >= i + 1 ? "#f59e0b" : "#64748b" }}>{l}</span>
+              ))}
+            </div>
+          </div>
+
+          <div style={{ maxWidth: 720, margin: "0 auto", padding: "24px 16px" }}>
+            {step === 1 && (
+              <div>
+                {card({}, <>
+                  <h2 style={{ fontSize: 18, fontWeight: 700, margin: "0 0 4px" }}>👥 Composição da Equipe</h2>
+                  <p style={{ color: "#6b7280", fontSize: 14, margin: "0 0 20px" }}>Quantos funcionários vão usar o LLM?</p>
+                  {inp("Seats Standard (uso básico - chat, resumos)", "standardSeats")}
+                  {inp("Seats Premium (uso intensivo - análise, código)", "premiumSeats")}
+                  <div style={{ background: "#f0f9ff", borderRadius: 8, padding: 12, marginTop: 8 }}>
+                    <span style={{ fontSize: 13, color: "#0369a1" }}>
+                      💡 <strong>Standard:</strong> usuários que usam 5-15x/dia. <strong>Premium:</strong> power users que usam 20-50x/dia.
+                    </span>
+                  </div>
+                </>)}
+                {card({}, <>
+                  <h2 style={{ fontSize: 18, fontWeight: 700, margin: "0 0 4px" }}>💰 Orçamento</h2>
+                  <p style={{ color: "#6b7280", fontSize: 14, margin: "0 0 20px" }}>Qual o teto mensal em USD?</p>
+                  {inp("Orçamento mensal máximo (USD)", "budget")}
+                  {sel("Nível técnico do time de TI", "techLevel", [
+                    { v: "low", l: "Baixo - sem dev interno" },
+                    { v: "medium", l: "Médio - tem desenvolvedor" },
+                    { v: "high", l: "Alto - time de engenharia" },
+                  ])}
+                </>)}
+                <button onClick={() => setStep(2)} style={{
+                  width: "100%", background: "#f59e0b", color: "white", border: "none", borderRadius: 10,
+                  padding: 14, fontSize: 16, fontWeight: 700, cursor: "pointer"
+                }}>Próximo: Padrão de Uso →</button>
+              </div>
+            )}
+
+            {step === 2 && (
+              <div>
+                {card({}, <>
+                  <h2 style={{ fontSize: 18, fontWeight: 700, margin: "0 0 4px" }}>📊 Padrão de Uso</h2>
+                  <p style={{ color: "#6b7280", fontSize: 14, margin: "0 0 20px" }}>Como seu time vai usar o LLM no dia a dia?</p>
+                  {inp("Mensagens por funcionário por dia (média)", "msgsPerDay", 1)}
+                  {sel("Intensidade das mensagens", "usageIntensity", [
+                    { v: "low", l: "Leve - perguntas curtas, resumos rápidos (~800 tokens/msg)" },
+                    { v: "medium", l: "Médio - análises, rascunhos, Q&A (~2.000 tokens/msg)" },
+                    { v: "high", l: "Pesado - documentos longos, código complexo (~5.000 tokens/msg)" },
+                  ])}
+                </>)}
+                {card({}, <>
+                  <h2 style={{ fontSize: 18, fontWeight: 700, margin: "0 0 16px" }}>🎯 Casos de Uso Principais</h2>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+                    {USE_CASES.map(uc => {
+                      const selected = inputs.useCases.includes(uc.id);
+                      return (
+                        <div key={uc.id} onClick={() => toggleUC(uc.id)} style={{
+                          padding: "10px 12px", borderRadius: 8, cursor: "pointer", fontSize: 13,
+                          border: `2px solid ${selected ? "#f59e0b" : "#e5e7eb"}`,
+                          background: selected ? "#fffbeb" : "white", fontWeight: selected ? 600 : 400,
+                        }}>{selected ? "✓ " : ""}{uc.label}</div>
+                      );
+                    })}
+                  </div>
+                </>)}
+                <div style={{ display: "flex", gap: 12 }}>
+                  <button onClick={() => setStep(1)} style={{
+                    flex: 1, background: "white", color: "#374151", border: "1px solid #d1d5db", borderRadius: 10,
+                    padding: 14, fontSize: 15, fontWeight: 600, cursor: "pointer"
+                  }}>← Voltar</button>
+                  <button onClick={() => setStep(3)} style={{
+                    flex: 2, background: "#f59e0b", color: "white", border: "none", borderRadius: 10,
+                    padding: 14, fontSize: 16, fontWeight: 700, cursor: "pointer"
+                  }}>Ver Resultados 🎯</button>
+                </div>
+              </div>
+            )}
+
+            {step === 3 && (
+              <div>
+                <div style={{
+                  background: `linear-gradient(135deg, ${winnerData.color}22 0%, ${winnerData.color}11 100%)`,
+                  border: `2px solid ${winnerData.color}`, borderRadius: 16, padding: 20, marginBottom: 20, textAlign: "center"
+                }}>
+                  <div style={{ fontSize: 32, marginBottom: 8 }}>{winnerData.logo}</div>
+                  <div style={{ fontSize: 13, color: "#6b7280", marginBottom: 4 }}>RECOMENDAÇÃO PARA SUA EMPRESA</div>
+                  <div style={{ fontSize: 26, fontWeight: 800, color: winnerData.color }}>{winnerData.name}</div>
+                  <div style={{ fontSize: 14, color: "#374151", marginTop: 6 }}>Score final: <strong>{results.scores[results.winner]}/10</strong> com {results.totalUsers} usuários</div>
+                  <div style={{ marginTop: 12, display: "flex", justifyContent: "center", gap: 8, flexWrap: "wrap" }}>
+                    {winnerData.strengths.map(s => (
+                      <span key={s} style={{ background: `${winnerData.color}22`, color: winnerData.color, padding: "4px 10px", borderRadius: 20, fontSize: 12, fontWeight: 600 }}>{s}</span>
+                    ))}
+                  </div>
+                </div>
+
+                {results.ragRecommended && (
+                  <div style={{ background: "#fef3c7", border: "2px solid #f59e0b", borderRadius: 12, padding: 16, marginBottom: 20 }}>
+                    <div style={{ fontSize: 16, fontWeight: 700, color: "#92400e", marginBottom: 6 }}>⚡ Considere RAG as a Service via API</div>
+                    <p style={{ fontSize: 13, color: "#78350f", margin: "0 0 8px" }}>
+                      Com seu volume de uso, migrar para API com RAG pode economizar até <strong>${Math.abs(results.ragSavings).toLocaleString()}/mês</strong>.
+                    </p>
+                    <p style={{ fontSize: 12, color: "#92400e", margin: 0 }}>
+                      {inputs.techLevel === "low" ? "⚠️ Nível técnico baixo - recomendamos buscar um parceiro de implementação."
+                        : inputs.techLevel === "medium" ? "✅ Time com devs - implementação via API é viável."
+                        : "🚀 Time técnico forte - API + RAG é o caminho ideal para escalar."}
+                    </p>
+                  </div>
+                )}
+
+                {card({}, <>
+                  <h3 style={{ fontSize: 16, fontWeight: 700, margin: "0 0 16px" }}>💵 Custo Mensal Estimado (USD)</h3>
+                  {Object.entries(results.r).map(([k, v]) => (
+                    <div key={k} style={{ border: `1px solid ${k === results.winner ? v.color : "#e5e7eb"}`, borderRadius: 10, padding: 14, marginBottom: 12, background: k === results.winner ? `${v.color}08` : "white" }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+                        <span style={{ fontWeight: 700, fontSize: 15 }}>{v.logo} {v.name}</span>
+                        {k === results.winner && <span style={{ background: v.color, color: "white", padding: "2px 8px", borderRadius: 20, fontSize: 11, fontWeight: 700 }}>RECOMENDADO</span>}
+                      </div>
+                      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 10 }}>
+                        {Object.entries(v.plans).filter(([pk]) => pk !== "api").map(([pk, plan]) => (
+                          <div key={pk} style={{ background: "#f8fafc", borderRadius: 8, padding: "8px 10px" }}>
+                            <div style={{ fontSize: 11, color: "#9ca3af" }}>{plan.name}</div>
+                            <div style={{ fontSize: 16, fontWeight: 700, color: plan.cost > inputs.budget ? "#ef4444" : "#059669" }}>${plan.cost.toLocaleString()}</div>
+                            <div style={{ fontSize: 10, color: "#9ca3af" }}>{plan.cost > inputs.budget ? "⚠️ Acima do orçamento" : "✅ Dentro do orçamento"}</div>
+                          </div>
+                        ))}
+                        <div style={{ background: "#fef9ec", borderRadius: 8, padding: "8px 10px", border: "1px dashed #f59e0b" }}>
+                          <div style={{ fontSize: 11, color: "#9ca3af" }}>API + RAG</div>
+                          <div style={{ fontSize: 16, fontWeight: 700, color: "#d97706" }}>${v.apiPlan.cost.toLocaleString()}</div>
+                          <div style={{ fontSize: 10, color: "#9ca3af" }}>Inclui ~$400 infra</div>
+                        </div>
+                      </div>
+                      <div style={{ fontSize: 12, color: "#6b7280", marginBottom: 4 }}>Score para seus casos de uso:</div>
+                      <ScoreBar value={v.useCaseScore} color={v.color} />
+                    </div>
+                  ))}
+                </>)}
+
+                {card({}, <>
+                  <h3 style={{ fontSize: 16, fontWeight: 700, margin: "0 0 4px" }}>📊 Comparativo de Custos</h3>
+                  <p style={{ fontSize: 13, color: "#6b7280", margin: "0 0 16px" }}>Plano corporativo vs solução via API</p>
+                  <ResponsiveContainer width="100%" height={220}>
+                    <BarChart data={chartData} margin={{ top: 0, right: 0, left: -10, bottom: 0 }}>
+                      <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
+                      <XAxis dataKey="name" tick={{ fontSize: 12 }} />
+                      <YAxis tick={{ fontSize: 11 }} tickFormatter={v => `$${v}`} />
+                      <Tooltip formatter={v => `$${v.toLocaleString()}`} />
+                      <Legend />
+                      <Bar dataKey="Plano Corporativo" fill="#6366f1" radius={[4,4,0,0]} />
+                      <Bar dataKey="Via API + RAG" fill="#f59e0b" radius={[4,4,0,0]} />
+                    </BarChart>
+                  </ResponsiveContainer>
+                </>)}
+
+                {card({}, <>
+                  <h3 style={{ fontSize: 16, fontWeight: 700, margin: "0 0 4px" }}>📈 Custo por Escala de Equipe</h3>
+                  <p style={{ fontSize: 13, color: "#6b7280", margin: "0 0 16px" }}>Como o custo evolui com mais usuários</p>
+                  <ResponsiveContainer width="100%" height={200}>
+                    <LineChart data={scaleData} margin={{ top: 0, right: 0, left: -10, bottom: 0 }}>
+                      <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
+                      <XAxis dataKey="seats" tick={{ fontSize: 11 }} />
+                      <YAxis tick={{ fontSize: 11 }} tickFormatter={v => `$${v}`} />
+                      <Tooltip formatter={v => `$${v.toLocaleString()}`} />
+                      <Legend />
+                      <Line type="monotone" dataKey="Claude" stroke="#D97706" strokeWidth={2} dot={false} />
+                      <Line type="monotone" dataKey="ChatGPT" stroke="#10B981" strokeWidth={2} dot={false} />
+                      <Line type="monotone" dataKey="Gemini" stroke="#6366F1" strokeWidth={2} dot={false} />
+                    </LineChart>
+                  </ResponsiveContainer>
+                </>)}
+
+                {card({ background: "#1e293b" }, <>
+                  <h3 style={{ fontSize: 15, fontWeight: 700, margin: "0 0 12px", color: "white" }}>📋 Resumo da Análise</h3>
+                  {[
+                    { l: "Total de usuários", v: results.totalUsers },
+                    { l: "Mensagens/mês estimadas", v: results.totalMsgsMonth.toLocaleString() },
+                    { l: "Intensidade de uso", v: inputs.usageIntensity === "low" ? "Leve" : inputs.usageIntensity === "medium" ? "Médio" : "Pesado" },
+                    { l: "Nível técnico do time", v: inputs.techLevel === "low" ? "Baixo" : inputs.techLevel === "medium" ? "Médio" : "Alto" },
+                    { l: "RAG via API recomendado", v: results.ragRecommended ? "✅ Sim" : "❌ Não necessário agora" },
+                    { l: "LLM recomendado", v: `${winnerData.logo} ${winnerData.name}` },
+                  ].map(row => (
+                    <div key={row.l} style={{ display: "flex", justifyContent: "space-between", fontSize: 13, marginBottom: 8 }}>
+                      <span style={{ color: "#94a3b8" }}>{row.l}</span>
+                      <span style={{ color: "white", fontWeight: 600 }}>{row.v}</span>
+                    </div>
+                  ))}
+                </>)}
+
+                <button onClick={() => setStep(1)} style={{
+                  width: "100%", background: "white", color: "#374151", border: "1px solid #d1d5db", borderRadius: 10,
+                  padding: 14, fontSize: 15, fontWeight: 600, cursor: "pointer", marginTop: 8
+                }}>← Recalcular com novos dados</button>
+              </div>
+            )}
+          </div>
+        </div>
+      );
+    }
+
+    ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+  </script>
+</body>
+</html>
